@@ -11,11 +11,13 @@ import "bpmn-js/dist/assets/bpmn-font/css/bpmn-embedded.css";
 interface BpmnCanvasProps {
   onElementAdded?: (element: any) => void;
   onConnectionCreated?: (connection: any) => void;
+  onElementRemoved?: (element: any) => void;
 }
 
 export default function BpmnCanvas({
   onElementAdded,
   onConnectionCreated,
+  onElementRemoved,
 }: BpmnCanvasProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const modelerRef = useRef<BpmnModeler | null>(null);
@@ -24,19 +26,28 @@ export default function BpmnCanvas({
   useEffect(() => {
     if (!canvasRef.current) return;
 
-    // ✅ 1. Removed keyboard.bindTo (implicit in new versions)
     const modeler = new BpmnModeler({
       container: canvasRef.current,
+      keyboard: { bindTo: document },
     });
 
     modelerRef.current = modeler;
 
+    // Listen to connection creation
     modeler.on("connection.create", (event: any) => {
       if (onConnectionCreated) {
         onConnectionCreated(event.context);
       }
     });
 
+    // Listen to element removal
+    modeler.on("elements.changed", (event: any) => {
+      if (event.removed && onElementRemoved) {
+        event.removed.forEach((el: any) => onElementRemoved(el));
+      }
+    });
+
+    // Initialize diagram and setup drag-drop
     createNewDiagram();
     setupDragAndDrop();
 
@@ -53,6 +64,126 @@ export default function BpmnCanvas({
       canvas.zoom("fit-viewport");
     } catch (err) {
       console.error("Error creating diagram:", err);
+    }
+  };
+
+  const applyTaskProperties = (
+    shape: any,
+    taskType: string,
+    properties: any,
+    modeling: any
+  ) => {
+    if (!properties) return;
+
+    try {
+      const moddle = modelerRef.current?.get("moddle") as any;
+
+      switch (taskType) {
+        case "userTask":
+          // Set assignee, candidate users/groups
+          if (properties.assignee || properties.candidateUsers?.length) {
+            modeling.updateModdleProperties(shape, shape.businessObject, {
+              assignee: properties.assignee,
+              priority: properties.priority || 50,
+            });
+          }
+          break;
+
+        case "serviceTask":
+          // Set implementation type
+          modeling.updateProperties(shape, {
+            type: "bpmn:ServiceTask",
+            implementation: properties.implementation || "##Service",
+          });
+          break;
+
+        case "camelTask":
+          // Camel-specific properties
+          modeling.updateModdleProperties(shape, shape.businessObject, {
+            type: "camel",
+            serviceImplementation: "org.apache.camel.flowable.CamelBehaviour",
+            camelContext: properties.camelContext || "",
+          });
+          break;
+
+        case "httpTask":
+          // HTTP-specific properties
+          modeling.updateModdleProperties(shape, shape.businessObject, {
+            type: "http",
+            httpMethod: properties.requestMethod || "GET",
+            httpUrl: properties.requestUrl || "",
+            httpHeaders: properties.requestHeaders || {},
+          });
+          break;
+
+        case "muleTask":
+          // Mule-specific properties
+          modeling.updateModdleProperties(shape, shape.businessObject, {
+            type: "mule",
+            muleEndpointUrl: properties.endpointUrl || "",
+            muleTransformer: properties.muleTransformer || "",
+          });
+          break;
+
+        case "mailTask":
+          // Mail-specific properties
+          modeling.updateModdleProperties(shape, shape.businessObject, {
+            type: "mail",
+            mailTo: properties.to || "",
+            mailFrom: properties.from || "",
+            mailSubject: properties.subject || "",
+            mailHtml: properties.html || "",
+            mailText: properties.text || "",
+            mailCc: properties.cc || "",
+            mailBcc: properties.bcc || "",
+          });
+          break;
+
+        case "scriptTask":
+          // Script-specific properties
+          modeling.updateModdleProperties(shape, shape.businessObject, {
+            scriptFormat: properties.scriptFormat || "JavaScript",
+            script: properties.script || "",
+            resultVariable: properties.resultVariable || "",
+            autoStoreVariables: properties.autoStoreVariables || true,
+          });
+          break;
+
+        case "businessRuleTask":
+        case "decisionTask":
+          // Decision table properties
+          modeling.updateModdleProperties(shape, shape.businessObject, {
+            decisionRef: properties.decisionRef || properties.decisionTableKey || "",
+            resultVariable: properties.resultVariable || "result",
+            mapDecisionResult: properties.mapDecisionResult || "resultList",
+          });
+          break;
+
+        case "receiveTask":
+          // Message correlation properties
+          modeling.updateModdleProperties(shape, shape.businessObject, {
+            messageRef: properties.messageRef || "",
+            messageQueueName: properties.messageQueueName || "",
+            correlationKey: properties.correlationKey || "",
+          });
+          break;
+
+        case "manualTask":
+          // Manual task documentation
+          if (properties.documentation) {
+            modeling.updateProperties(shape, {
+              documentation: properties.documentation,
+            });
+          }
+          break;
+
+        default:
+          break;
+      }
+
+      console.log(`✅ Task properties applied for ${taskType}`);
+    } catch (err) {
+      console.error(`Error applying task properties for ${taskType}:`, err);
     }
   };
 
@@ -140,6 +271,7 @@ export default function BpmnCanvas({
       className={`w-full h-full transition-colors duration-200 ${
         isDragging ? "bg-blue-50" : "bg-white"
       }`}
+      style={{ position: "relative" }}
     />
   );
 }
